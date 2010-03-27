@@ -67,8 +67,12 @@ var defaults = {
 	buttonIcons: {
 		prev: 'circle-triangle-w',
 		next: 'circle-triangle-e'
-	}
+	},
 	
+	// dragToCreate
+	dragToCreate: true,
+	dragToCreateFn: function(view,calEvent){},
+	forceUpdateOnChange: false
 };
 
 // right-to-left defaults
@@ -184,6 +188,10 @@ $.fn.fullCalendar = function(options) {
 			if (v != viewName) {
 				fixContentSize();
 				if (view) {
+					if (options.forceUpdateOnChange) {
+						view.eventsChanged = true;
+						view.eventsDirty = true;
+					}
 					if (view.eventsChanged) {
 						eventsDirtyExcept(view);
 						view.eventsChanged = false;
@@ -215,6 +223,10 @@ $.fn.fullCalendar = function(options) {
 			if ((elementWidth = _element.offsetWidth) !== 0) { // visible on the screen
 				if (!contentHeight) {
 					contentHeight = calculateContentHeight();
+				}
+				if (options.forceUpdateOnChange) {
+					view.date = 0;
+					eventStart = 0;
 				}
 				if (inc || !view.date || +view.date != +date) { // !view.date means it hasn't been rendered yet
 					fixContentSize();
@@ -250,13 +262,80 @@ $.fn.fullCalendar = function(options) {
 						header.find('div.fc-button-today').removeClass(tm + '-state-disabled');
 					}
 				}
+				view.selcol = -1;
 				view.sizeDirty = false;
 				view.eventsDirty = false;
 				view.trigger('viewDisplay', _element);
+				if (options.dragToCreate && (view.name == 'agendaWeek' || view.name == 'agendaDay')){
+					initDragToCreate();
+				}
 			}
 		}
 		
-		// marks other views' events as dirty
+		function initDragToCreate(){
+			  var selOpts = {
+				  autoRefresh: true,
+				  filter: ".fc-rowcol",
+				  tolerance: 'touch',
+				  start: function(e) {
+					  $('.ui-selected', this).removeClass('ui-selected');
+					  $('.fc-rowcol').css('z-index', '9');
+				  },
+				  stop: function(e) {
+					  // date1 = readAgendaTime(e);					 
+					  selTime = $('.selection .fc-event-time').html();
+					  y = view.visStart.getFullYear();
+					  m = view.visStart.getMonth();
+					  d = view.visStart.getDate() + view.selcol;
+					
+					  h1 = selTime.match(/(\d+):(\d+)\-/)[1];
+					  m1 = (selTime.match(/(\d+):(\d+)\-/))[2];
+					  h2 = selTime.match(/\-(\d+):(\d+)/)[1];
+					  m2 = (selTime.match(/\-(\d+):(\d+)/))[2];
+					  calEvent = {title : '(No Title)', unsaved: true, start: new Date(y, m, d, h1, m1), end: new Date(y, m, d, h2, m2), allDay: false};
+					
+					  //NOTE: pulled from public method renderEvent
+					  //TODO: instead of duplicating code make aliase somehow to reference other code
+					  normalizeEvent(calEvent, options);
+					  if (!calEvent.source) {
+						  (calEvent.source = eventSources[0]).push(calEvent);
+						  events.push(calEvent);
+					  }
+					  eventsChanged();
+					  if (options['dragToCreateFn']) {
+						  options['dragToCreateFn'].apply(_element,[calEvent]);
+					  }
+					  $('.fc-rowcol').css('z-index', '7');
+					  $('div.fc-rowday' + view.selcol).html('');
+					  $(this).selectable('destroy');
+					  view.selcol = -1;
+				  },
+				  selecting: function(e, ui) {
+					  renderSelection();
+				  },
+				  unselecting: function (e, ui) {
+					  renderSelection();
+				  }
+			  }
+			  $(".fc-agenda-body div.fc-rowcol",view.element).mousedown(function() {
+				  if (view.selcol < 0) {
+					  view.selcol = parseInt(this.className.match(/fc\-rowday(\d+)/)[1]);
+					  selOpts.filter = 'div.fc-rowtable div.fc-rowday' + view.selcol;
+					  $(".fc-agenda-body",view.element).selectable(selOpts);
+				  }
+			  });
+		}
+		
+		function renderSelection() {
+			$('div.fc-rowday' + view.selcol).html('');
+			var div1 = $('.ui-selecting').get(0);
+			hm1 = (div1.id.match(/(\d+:\d+)\-/))[1];
+			count = $('.ui-selecting').size();
+			hm2 = ($('.ui-selecting').get(count - 1).id.match(/\-(\d+:\d+)/))[1];
+			divWidth = (view.name == 'agendaDay') ? 770 : 104;
+			$(div1).html('<div class="selection" style="z-index: 10;"><div class="fc-event fc-event-vert fc-corner-top fc-corner-bottom ui-draggable ui-resizable ui-resizable-resizing" style="z-index: 9; width: ' + divWidth + 'px; height: ' + (21*count - 2) + 'px;"><a><span class="fc-event-bg"/><span class="fc-event-time">' + hm1 + '-' + hm2 + '</span></a></div></div>');
+		}
+		
 		function eventsDirtyExcept(exceptView) {
 			$.each(viewInstances, function() {
 				if (this != exceptView) {

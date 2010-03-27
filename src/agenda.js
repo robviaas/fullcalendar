@@ -187,7 +187,17 @@ function Agenda(element, options, methods) {
 					"'><th class='fc-axis fc-leftmost " + tm + "-state-default'>" +
 					((!slotNormal || minutes==0) ? formatDate(d, options.axisFormat) : '&nbsp;') + 
 					"</th><td class='fc-slot" + i + ' ' +
-						tm + "-state-default'><div>&nbsp;</div></td></tr>";
+						tm + "-state-default'><div><div class='fc-rowtable' style='position: relative;'>";
+				for (var x=0; x < colCnt; x++) {
+					var hmID1 = zeroPad(d.getHours()) + ':' + zeroPad(d.getMinutes());
+					// hmID2 = hmID1;
+					var d2 = cloneDate(d);
+					addMinutes(d2, options.slotMinutes);
+					var hmID2 = zeroPad(d2.getHours()) + ':' + zeroPad(d2.getMinutes());
+					s += "<div id='" + hmID1 + '-' + hmID2 + "' class='fc-rowcol fc-rowday" + x + "' style='float: left; position: relative; z-index: 7;'>&nbsp;</div>";
+				}
+				s += "</div></div></td></tr>";
+				
 				addMinutes(d, options.slotMinutes);
 			}
 			s += "</table>";
@@ -195,7 +205,7 @@ function Agenda(element, options, methods) {
 				.append(bodyContent = $("<div style='position:relative;overflow:hidden'>")
 					.append(bodyTable = $(s)))
 				.appendTo(element);
-			body.find('td').click(slotClick);
+			body.find('td:not(.fc-rowcol)').click(slotClick);
 			
 			// background stripes
 			d = cloneDate(d0);
@@ -305,7 +315,12 @@ function Agenda(element, options, methods) {
 		// column width
 		colWidth = Math.floor((contentWidth - axisWidth) / colCnt);
 		setOuterWidth(stripeTDs.slice(0, -1), colWidth);
-		setOuterWidth(topTDs.slice(1, -2), colWidth);
+		var thdelta = 0;
+		var headw = head.children(0).width(), bodyw = body.children(0).width();
+		if (headw == bodyw) {
+			thdelta = 4;
+		}
+		setOuterWidth(topTDs.slice(1, -2), colWidth + thdelta);
 		setOuterWidth(topTDs.slice(-2, -1), contentWidth - axisWidth - colWidth*(colCnt-1));
 		
 		bg.css({
@@ -316,6 +331,15 @@ function Agenda(element, options, methods) {
 		});
 		
 		slotHeight = body.find('tr:first div').height() + 1;
+		
+		var rtw = Math.floor(contentWidth - axisWidth);
+		var rowTables = body.find('.fc-rowtable');
+		rowTables.each(function() {
+			$(this).width(rtw);
+			var rowCols = $(this).find('.fc-rowcol');
+			setOuterWidth(rowCols.slice(0,-1), colWidth);
+			setOuterWidth(rowCols.slice(-1), contentWidth - axisWidth - colWidth*(colCnt-1));
+		});
 		
 		// TODO:
 		//reportTBody(bodyTable.find('tbody'));
@@ -861,8 +885,8 @@ function Agenda(element, options, methods) {
 		var slotMinutes = options.slotMinutes,
 			minutes = time.getHours()*60 + time.getMinutes() - minMinute,
 			slotI = Math.floor(minutes / slotMinutes),
-			tr = body.find('tr:eq(' + slotI + ')'),
-			td = tr.find('td'),
+			tr = body.find('tr:not(.fc-rowrow):eq(' + slotI + ')'),
+			td = tr.find('td:not(.fc-rowcol)'),
 			innerDiv = td.find('div');
 		return Math.max(0, Math.round(
 			safePosition(innerDiv, td, tr, tr.parent()).top - 1 + slotHeight * ((minutes % slotMinutes) / slotMinutes)

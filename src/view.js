@@ -247,6 +247,9 @@ var viewMethods = {
 						return view.trigger('eventClick', this, event, ev);
 					}
 			})
+			.dblclick(function(ev) {
+				return view.trigger('eventDblClick', this, event, ev);
+			})
 			.hover(
 				function(ev) {
 					view.trigger('eventMouseover', this, event, ev);
