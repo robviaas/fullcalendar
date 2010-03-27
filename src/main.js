@@ -26,6 +26,7 @@ var defaults = {
 	allDayDefault: true,
 	
 	// event ajax
+	lazyFetching: true,
 	startParam: 'start',
 	endParam: 'end',
 	
@@ -97,7 +98,7 @@ var rtlDefaults = {
 // function for adding/overriding defaults
 var setDefaults = fc.setDefaults = function(d) {
 	$.extend(true, defaults, d);
-}
+};
 
 
 
@@ -111,12 +112,15 @@ $.fn.fullCalendar = function(options) {
 		var args = Array.prototype.slice.call(arguments, 1),
 			res;
 		this.each(function() {
-			var r = $.data(this, 'fullCalendar')[options].apply(this, args);
-			if (res == undefined) {
-				res = r;
+			var data = $.data(this, 'fullCalendar');
+			if (data) {
+				var r = data[options].apply(this, args);
+				if (res === undefined) {
+					res = r;
+				}
 			}
 		});
-		if (res != undefined) {
+		if (res !== undefined) {
 			return res;
 		}
 		return this;
@@ -136,7 +140,7 @@ $.fn.fullCalendar = function(options) {
 	// initialize options
 	options = $.extend(true, {},
 		defaults,
-		(options.isRTL || options.isRTL==undefined && defaults.isRTL) ? rtlDefaults : {},
+		(options.isRTL || options.isRTL===undefined && defaults.isRTL) ? rtlDefaults : {},
 		options
 	);
 	var tm = options.theme ? 'ui' : 'fc'; // for making theme classes
@@ -151,31 +155,36 @@ $.fn.fullCalendar = function(options) {
 		// element
 		var _element = this,
 			element = $(_element).addClass('fc'),
-			elementWidth,
-			content = $("<div class='fc-content " + tm + "-widget-content' style='position:relative'/>").prependTo(_element), // relative for ie6
-			contentHeight;
+			elementOuterWidth,
+			content = $("<div class='fc-content " + tm + "-widget-content' style='position:relative'/>").prependTo(_element),
+			suggestedViewHeight,
+			resizeUID = 0,
+			ignoreWindowResize = 0,
+			date = new Date(),
+			viewName,  // the current view name (TODO: look into getting rid of)
+			view,      // the current view
+			viewInstances = {},
+			absoluteViewElement;
+			
+			
+			
 		if (options.isRTL) {
 			element.addClass('fc-rtl');
 		}
 		if (options.theme) {
 			element.addClass('ui-widget');
 		}
-		
-		// view managing
-		var date = new Date(),
-			viewName, view, // the current view
-			viewInstances = {};
 			
-		if (options.year != undefined && options.year != date.getFullYear()) {
+		if (options.year !== undefined && options.year != date.getFullYear()) {
 			date.setDate(1);
 			date.setMonth(0);
 			date.setFullYear(options.year);
 		}
-		if (options.month != undefined && options.month != date.getMonth()) {
+		if (options.month !== undefined && options.month != date.getMonth()) {
 			date.setDate(1);
 			date.setMonth(options.month);
 		}
-		if (options.date != undefined) {
+		if (options.date !== undefined) {
 			date.setDate(options.date);
 		}
 		
@@ -186,71 +195,96 @@ $.fn.fullCalendar = function(options) {
 		
 		function changeView(v) {
 			if (v != viewName) {
-				fixContentSize();
-				if (view) {
+				ignoreWindowResize++; // because setMinHeight might change the height before render (and subsequently setSize) is reached
+				
+				var oldView = view,
+					newViewElement;
+					
+				if (oldView) {
 					if (options.forceUpdateOnChange) {
-						view.eventsChanged = true;
-						view.eventsDirty = true;
+						oldView.eventsChanged = true;
 					}
-					if (view.eventsChanged) {
-						eventsDirtyExcept(view);
-						view.eventsChanged = false;
+					if (oldView.eventsChanged) {
+						eventsDirty();
+						oldView.eventDirty = oldView.eventsChanged = false;
 					}
-					view.element.hide();
+					if (oldView.beforeHide) {
+						oldView.beforeHide(); // called before changing min-height. if called after, scroll state is reset (in Opera)
+					}
+					setMinHeight(content, content.height());
+					oldView.element.hide();
+				}else{
+					setMinHeight(content, 1); // needs to be 1 (not 0) for IE7, or else view dimensions miscalculated
 				}
+				content.css('overflow', 'hidden');
+				
 				if (viewInstances[v]) {
 					(view = viewInstances[v]).element.show();
-					if (view.shown) {
-						view.shown();
-					}
 				}else{
 					view = viewInstances[v] = $.fullCalendar.views[v](
-						$("<div class='fc-view fc-view-" + v + "'/>").appendTo(content),
-						options);
+						newViewElement = absoluteViewElement =
+							$("<div class='fc-view fc-view-" + v + "' style='position:absolute'/>")
+								.appendTo(content),
+						options
+					);
 				}
+				
 				if (header) {
 					// update 'active' view button
 					header.find('div.fc-button-' + viewName).removeClass(tm + '-state-active');
 					header.find('div.fc-button-' + v).addClass(tm + '-state-active');
 				}
+				
 				view.name = viewName = v;
-				render();
-				unfixContentSize();
+				render(); // after height has been set, will make absoluteViewElement's position=relative, then set to null
+				content.css('overflow', '');
+				if (oldView) {
+					setMinHeight(content, 1);
+				}
+				if (!newViewElement && view.afterShow) {
+					view.afterShow(); // called after setting min-height/overflow, so in final scroll state (for Opera)
+				}
+				
+				ignoreWindowResize--;
 			}
 		}
 		
-		function render(inc, forceUpdateSize) {
-			if ((elementWidth = _element.offsetWidth) !== 0) { // visible on the screen
-				if (!contentHeight) {
-					contentHeight = calculateContentHeight();
+		function render(inc) {
+			if (elementVisible()) {
+				ignoreWindowResize++; // because view.renderEvents might temporarily change the height before setSize is reached
+				
+				if (suggestedViewHeight === undefined) {
+					calcSize();
 				}
+				
 				if (options.forceUpdateOnChange) {
 					view.date = 0;
 					eventStart = 0;
 				}
-				if (inc || !view.date || +view.date != +date) { // !view.date means it hasn't been rendered yet
-					fixContentSize();
-					view.render(date, inc || 0, contentHeight, function(callback) {
-						// dont refetch if new view contains the same events (or a subset)
-						if (!eventStart || view.visStart < eventStart || view.visEnd > eventEnd) {
-							fetchEvents(callback);
-						}else{
-							callback(events); // no refetching
-						}
-					});
-					unfixContentSize();
-					view.date = cloneDate(date);
+				if (!view.start || inc || date < view.start || date >= view.end) {
+					view.render(date, inc || 0); // responsible for clearing events
+					setSize(true);
+					if (!eventStart || !options.lazyFetching || view.visStart < eventStart || view.visEnd > eventEnd) {
+						fetchAndRenderEvents();
+					}else{
+						view.renderEvents(events); // don't refetch
+					}
 				}
-				else if (view.sizeDirty || forceUpdateSize) {
-					view.updateSize(contentHeight);
-					view.rerenderEvents();
-				}
-				else if (view.eventsDirty) {
-					// ensure events are rerendered if another view messed with them
-					// pass in 'events' b/c event might have been added/removed
+				else if (view.sizeDirty || view.eventsDirty || !options.lazyFetching) {
 					view.clearEvents();
-					view.renderEvents(events);
+					if (view.sizeDirty) {
+						setSize();
+					}
+					if (options.lazyFetching) {
+						view.renderEvents(events); // don't refetch
+					}else{
+						fetchAndRenderEvents();
+					}
 				}
+				elementOuterWidth = element.outerWidth();
+				view.sizeDirty = false;
+				view.eventsDirty = false;
+				
 				if (header) {
 					// update title text
 					header.find('h2.fc-header-title').html(view.title);
@@ -263,8 +297,7 @@ $.fn.fullCalendar = function(options) {
 					}
 				}
 				view.selcol = -1;
-				view.sizeDirty = false;
-				view.eventsDirty = false;
+				ignoreWindowResize--;
 				view.trigger('viewDisplay', _element);
 				if (options.dragToCreate && (view.name == 'agendaWeek' || view.name == 'agendaDay')){
 					initDragToCreate();
@@ -342,48 +375,52 @@ $.fn.fullCalendar = function(options) {
 					this.eventsDirty = true;
 				}
 			});
+        }
+		
+		function elementVisible() {
+			return _element.offsetWidth !== 0;
 		}
+		
+		function bodyVisible() {
+			return $('body')[0].offsetWidth !== 0;
+		}
+		
 		
 		// called when any event objects have been added/removed/changed, rerenders
 		function eventsChanged() {
-			view.clearEvents();
-			view.renderEvents(events);
-			eventsDirtyExcept(view);
+			eventsDirty();
+			if (elementVisible()) {
+				view.clearEvents();
+				view.renderEvents(events);
+				view.eventsDirty = false;
+			}
 		}
 		
-		// marks other views' sizes as dirty
-		function sizesDirtyExcept(exceptView) {
+		// marks other views' events as dirty
+		function eventsDirty() {
 			$.each(viewInstances, function() {
-				if (this != exceptView) {
-					this.sizeDirty = true;
-				}
+				this.eventsDirty = true;
 			});
 		}
 		
 		// called when we know the element size has changed
-		function sizeChanged(fix) {
-			contentHeight = calculateContentHeight();
-			if (fix) {
-				fixContentSize();
+		function sizeChanged() {
+			sizesDirty();
+			if (elementVisible()) {
+				calcSize();
+				setSize();
+				view.rerenderEvents();
+				view.sizeDirty = false;
 			}
-			view.updateSize(contentHeight);
-			if (fix) {
-				unfixContentSize();
-			}
-			sizesDirtyExcept(view);
-			view.rerenderEvents(true);
 		}
 		
-		// calculate what the height of the content should be
-		function calculateContentHeight() {
-			if (options.contentHeight) {
-				return options.contentHeight;
-			}
-			else if (options.height) {
-				return options.height - (header ? header.height() : 0) - horizontalSides(content);
-			}
-			return elementWidth / Math.max(options.aspectRatio, .5);
+		// marks other views' sizes as dirty
+		function sizesDirty() {
+			$.each(viewInstances, function() {
+				this.sizeDirty = true;
+			});
 		}
+		
 		
 		
 		
@@ -400,7 +437,7 @@ $.fn.fullCalendar = function(options) {
 			eventEnd = cloneDate(view.visEnd);
 			var queued = eventSources.length,
 				sourceDone = function() {
-					if (--queued == 0) {
+					if (!--queued) {
 						if (callback) {
 							callback(events);
 						}
@@ -458,6 +495,14 @@ $.fn.fullCalendar = function(options) {
 		}
 		
 		
+		// for convenience
+		function fetchAndRenderEvents() {
+			fetchEvents(function(events) {
+				view.renderEvents(events); // maintain `this` in view
+			});
+		}
+		
+		
 		
 		/* Loading State
 		-----------------------------------------------------------------------------*/
@@ -484,7 +529,10 @@ $.fn.fullCalendar = function(options) {
 		var publicMethods = {
 		
 			render: function() {
-				render(0, true); // true forces size to updated
+				calcSize();
+				sizesDirty();
+				eventsDirty();
+				render();
 			},
 			
 			changeView: changeView,
@@ -498,14 +546,12 @@ $.fn.fullCalendar = function(options) {
 			},
 			
 			option: function(name, value) {
-				if (value == undefined) {
+				if (value === undefined) {
 					return options[name];
 				}
 				if (name == 'height' || name == 'contentHeight' || name == 'aspectRatio') {
-					if (!contentSizeFixed) {
-						options[name] = value;
-						sizeChanged();
-					}
+					options[name] = value;
+					sizeChanged();
 				}
 			},
 			
@@ -549,13 +595,13 @@ $.fn.fullCalendar = function(options) {
 				if (typeof year == 'object') {
 					date = cloneDate(year); // provided 1 argument, a Date
 				}else{
-					if (year != undefined) {
+					if (year !== undefined) {
 						date.setFullYear(year);
 					}
-					if (month != undefined) {
+					if (month !== undefined) {
 						date.setMonth(month);
 					}
-					if (dateNum != undefined) {
+					if (dateNum !== undefined) {
 						date.setDate(dateNum);
 					}
 				}
@@ -563,13 +609,13 @@ $.fn.fullCalendar = function(options) {
 			},
 			
 			incrementDate: function(years, months, days) {
-				if (years != undefined) {
+				if (years !== undefined) {
 					addYears(date, years);
 				}
-				if (months != undefined) {
+				if (months !== undefined) {
 					addMonths(date, months);
 				}
-				if (days != undefined) {
+				if (days !== undefined) {
 					addDays(date, days);
 				}
 				render();
@@ -661,9 +707,7 @@ $.fn.fullCalendar = function(options) {
 				return events; // else, return all
 			},
 			
-			rerenderEvents: function() {
-				view.rerenderEvents(); 
-			},
+			rerenderEvents: eventsChanged, // TODO: think of renaming eventsChanged
 			
 			//
 			// Event Source
@@ -671,9 +715,7 @@ $.fn.fullCalendar = function(options) {
 		
 			addEventSource: function(source) {
 				eventSources.push(source);
-				fetchEventSource(source, function() {
-					eventsChanged();
-				});
+				fetchEventSource(source, eventsChanged);
 			},
 		
 			removeEventSource: function(source) {
@@ -733,7 +775,7 @@ $.fn.fullCalendar = function(options) {
 							else if (views[buttonName]) {
 								buttonClick = function() {
 									button.removeClass(tm + '-state-hover');
-									changeView(buttonName)
+									changeView(buttonName);
 								};
 							}
 							if (buttonClick) {
@@ -804,71 +846,75 @@ $.fn.fullCalendar = function(options) {
 		/* Resizing
 		-----------------------------------------------------------------------------*/
 		
-		var contentSizeFixed = false,
-			resizeCnt = 0;
 		
-		function fixContentSize() {
-			if (!contentSizeFixed) {
-				contentSizeFixed = true;
-				content.css({
-					overflow: 'hidden',
-					height: contentHeight
-				});
-				// TODO: previous action might have caused scrollbars
-				// which will make the window width more narrow, possibly changing the aspect ratio
+		function calcSize() {
+			if (options.contentHeight) {
+				suggestedViewHeight = options.contentHeight;
+			}
+			else if (options.height) {
+				suggestedViewHeight = options.height - (header ? header.height() : 0) - vsides(content[0]);
+			}
+			else {
+				suggestedViewHeight = Math.round(content.width() / Math.max(options.aspectRatio, .5));
 			}
 		}
 		
-		function unfixContentSize() {
-			if (contentSizeFixed) {
-				content.css({
-					overflow: 'visible',
-					height: ''
-				});
-				if ($.browser.msie && ($.browser.version=='6.0' || $.browser.version=='7.0')) {
-					// in IE6/7 the inside of the content div was invisible
-					// bizarre hack to get this work... need both lines
-					content[0].clientHeight;
-					content.hide().show();
-				}
-				contentSizeFixed = false;
+		
+		function setSize(dateChanged) {
+			ignoreWindowResize++;
+			view.setHeight(suggestedViewHeight, dateChanged);
+			if (absoluteViewElement) {
+				absoluteViewElement.css('position', 'relative');
+				absoluteViewElement = null;
 			}
+			view.setWidth(content.width(), dateChanged);
+			ignoreWindowResize--;
 		}
+		
 		
 		function windowResize() {
-			if (!contentSizeFixed) {
-				if (view.date) { // view has already been rendered
-					var rcnt = ++resizeCnt; // add a delay
-					setTimeout(function() {
-						if (rcnt == resizeCnt && !contentSizeFixed) {
-							var newWidth = element.width();
-							if (newWidth != elementWidth) {
-								elementWidth = newWidth;
-								sizeChanged(true);
+			if (!ignoreWindowResize) {
+				if (view.start) { // view has already been rendered
+					var uid = ++resizeUID;
+					setTimeout(function() { // add a delay
+						if (uid == resizeUID && !ignoreWindowResize && elementVisible()) {
+							if (elementOuterWidth != (elementOuterWidth = element.outerWidth())) {
+								ignoreWindowResize++; // in case the windowResize callback changes the height
+								sizeChanged();
 								view.trigger('windowResize', _element);
+								ignoreWindowResize--;
 							}
 						}
 					}, 200);
 				}else{
-					render(); // render for first time
-					// was probably in a 0x0 iframe that has just been resized
+					// calendar must have been initialized in a 0x0 iframe that has just been resized
+					lateRender();
 				}
 			}
-		};
+		}
 		$(window).resize(windowResize);
 		
 		
 		// let's begin...
 		changeView(options.defaultView);
 		
-		// in IE, when in 0x0 iframe, initial resize never gets called, so do this...
-		if ($.browser.msie && !$('body').width()) {
-			setTimeout(function() {
-				render();
-				content.hide().show(); // needed for IE 6
-				view.rerenderEvents(); // needed for IE 7
-			}, 0);
+		
+		// needed for IE in a 0x0 iframe, b/c when it is resized, never triggers a windowResize
+		if (!bodyVisible()) {
+			lateRender();
 		}
+		
+		
+		// called when we know the calendar couldn't be rendered when it was initialized,
+		// but we think it's ready now
+		function lateRender() {
+			setTimeout(function() { // IE7 needs this so dimensions are calculated correctly
+				if (!view.start && bodyVisible()) { // !view.start makes sure this never happens more than once
+					render();
+				}
+			},0);
+		}
+
 	
 	});
 	
@@ -884,7 +930,7 @@ $.fn.fullCalendar = function(options) {
 var fakeID = 0;
 
 function normalizeEvent(event, options) {
-	event._id = event._id || (event.id == undefined ? '_fc' + fakeID++ : event.id + '');
+	event._id = event._id || (event.id === undefined ? '_fc' + fakeID++ : event.id + '');
 	if (event.date) {
 		if (!event.start) {
 			event.start = event.date;
@@ -897,7 +943,7 @@ function normalizeEvent(event, options) {
 		event.end = null;
 	}
 	event._end = event.end ? cloneDate(event.end) : null;
-	if (event.allDay == undefined) {
+	if (event.allDay === undefined) {
 		event.allDay = options.allDayDefault;
 	}
 	if (event.className) {

@@ -14,7 +14,6 @@ var viewMethods = {
 	 * - visStart
 	 * - visEnd
 	 * - defaultEventEnd(event)
-	 * - visEventEnd(event)
 	 * - render(events)
 	 * - rerenderEvents()
 	 *
@@ -31,7 +30,6 @@ var viewMethods = {
 	init: function(element, options) {
 		this.element = element;
 		this.options = options;
-		this.cachedEvents = [];
 		this.eventsByID = {};
 		this.eventElements = [];
 		this.eventElementsByID = {};
@@ -61,8 +59,7 @@ var viewMethods = {
 	
 	reportEvents: function(events) { // events are already normalized at this point
 		var i, len=events.length, event,
-			eventsByID = this.eventsByID = {},
-			cachedEvents = this.cachedEvents = [];
+			eventsByID = this.eventsByID = {};
 		for (i=0; i<len; i++) {
 			event = events[i];
 			if (eventsByID[event._id]) {
@@ -70,7 +67,6 @@ var viewMethods = {
 			}else{
 				eventsByID[event._id] = [event];
 			}
-			cachedEvents.push(event);
 		}
 	},
 	
@@ -92,10 +88,7 @@ var viewMethods = {
 	
 	// event element manipulation
 	
-	clearEvents: function() { // only remove ELEMENTS
-		$.each(this.eventElements, function() {
-			this.remove();
-		});
+	_clearEvents: function() { // only resets hashes
 		this.eventElements = [];
 		this.eventElementsByID = {};
 	},
@@ -112,7 +105,7 @@ var viewMethods = {
 		var elements = this.eventElementsByID[event._id],
 			i, len = elements.length;
 		for (i=0; i<len; i++) {
-			if (elements[i] != exceptElement) {
+			if (elements[i][0] != exceptElement[0]) { // AHAHAHAHAHAHAHAH
 				elements[i][funcName]();
 			}
 		}
@@ -124,27 +117,29 @@ var viewMethods = {
 	
 	eventDrop: function(e, event, dayDelta, minuteDelta, allDay, ev, ui) {
 		var view = this,
-			oldAllDay = event.allDay;
-		view.moveEvents(view.eventsByID[event._id], dayDelta, minuteDelta, allDay);
+			oldAllDay = event.allDay,
+			eventId = event._id;
+		view.moveEvents(view.eventsByID[eventId], dayDelta, minuteDelta, allDay);
 		view.trigger('eventDrop', e, event, dayDelta, minuteDelta, allDay, function() { // TODO: change docs
 			// TODO: investigate cases where this inverse technique might not work
-			view.moveEvents(view.eventsByID[event._id], -dayDelta, -minuteDelta, oldAllDay);
+			view.moveEvents(view.eventsByID[eventId], -dayDelta, -minuteDelta, oldAllDay);
 			view.rerenderEvents();
 		}, ev, ui);
 		view.eventsChanged = true;
-		view.rerenderEvents();
+		view.rerenderEvents(eventId);
 	},
 	
 	eventResize: function(e, event, dayDelta, minuteDelta, ev, ui) {
-		var view = this;
-		view.elongateEvents(view.eventsByID[event._id], dayDelta, minuteDelta);
+		var view = this,
+			eventId = event._id;
+		view.elongateEvents(view.eventsByID[eventId], dayDelta, minuteDelta);
 		view.trigger('eventResize', e, event, dayDelta, minuteDelta, function() {
 			// TODO: investigate cases where this inverse technique might not work
-			view.elongateEvents(view.eventsByID[event._id], -dayDelta, -minuteDelta);
+			view.elongateEvents(view.eventsByID[eventId], -dayDelta, -minuteDelta);
 			view.rerenderEvents();
 		}, ev, ui);
 		view.eventsChanged = true;
-		view.rerenderEvents();
+		view.rerenderEvents(eventId);
 	},
 	
 	
@@ -155,7 +150,7 @@ var viewMethods = {
 		minuteDelta = minuteDelta || 0;
 		for (var e, len=events.length, i=0; i<len; i++) {
 			e = events[i];
-			if (allDay != undefined) {
+			if (allDay !== undefined) {
 				e.allDay = allDay;
 			}
 			addMinutes(addDays(e.start, dayDelta, true), minuteDelta);
@@ -209,7 +204,7 @@ var viewMethods = {
 		var view = this;
 		if (!view.options.disableResizing && eventElement.resizable) {
 			eventElement.resizable({
-				handles: view.options.isRTL ? 'w' : 'e',
+				handles: view.options.isRTL ? {w:'div.ui-resizable-w'} : {e:'div.ui-resizable-e'},
 				grid: colWidth,
 				minWidth: colWidth/2, // need this or else IE throws errors when too small
 				containment: view.element.parent().parent(), // the main element...
@@ -276,7 +271,7 @@ var viewMethods = {
 	
 	// event rendering utilities
 	
-	sliceSegs: function(events, start, end) {
+	sliceSegs: function(events, visEventEnds, start, end) {
 		var segs = [],
 			i, len=events.length, event,
 			eventStart, eventEnd,
@@ -285,7 +280,7 @@ var viewMethods = {
 		for (i=0; i<len; i++) {
 			event = events[i];
 			eventStart = event.start;
-			eventEnd = this.visEventEnd(event);
+			eventEnd = visEventEnds[i];
 			if (eventEnd > start && eventStart < end) {
 				if (eventStart < start) {
 					segStart = cloneDate(start);
@@ -317,6 +312,25 @@ var viewMethods = {
 
 };
 
+
+
+function lazySegBind(container, segs, bindHandlers) {
+	container.unbind('mouseover').mouseover(function(ev) {
+		var parent=ev.target, e,
+			i, seg;
+		while (parent != this) {
+			e = parent;
+			parent = parent.parentNode;
+		}
+		if ((i = e._fci) !== undefined) {
+			e._fci = undefined;
+			seg = segs[i];
+			bindHandlers(seg.event, seg.element, seg);
+			$(ev.target).trigger(ev);
+		}
+		ev.stopPropagation();
+	});
+}
 
 
 
@@ -361,4 +375,6 @@ function segCmp(a, b) {
 function segsCollide(seg1, seg2) {
 	return seg1.end > seg2.start && seg1.start < seg2.end;
 }
+
+
 

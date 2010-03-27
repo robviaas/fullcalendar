@@ -79,13 +79,13 @@ function zeroDate() { // returns a Date with time 00:00:00 and dateOfMonth=1
 	var i=0, d;
 	do {
 		d = new Date(1970, i++, 1);
-	} while (d.getHours() != 0);
+	} while (d.getHours()); // != 0
 	return d;
 }
 
 function skipWeekend(date, inc, excl) {
 	inc = inc || 1;
-	while (date.getDay()==0 || (excl && date.getDay()==1 || !excl && date.getDay()==6)) {
+	while (!date.getDay() || (excl && date.getDay()==1 || !excl && date.getDay()==6)) {
 		addDays(date, inc);
 	}
 	return date;
@@ -111,7 +111,7 @@ var parseDate = fc.parseDate = function(s) {
 	}
 	// TODO: never return invalid dates (like from new Date(<string>)), return null instead
 	return null;
-}
+};
 
 var parseISO8601 = fc.parseISO8601 = function(s, ignoreTimezone) {
 	// derived from http://delete.me.uk/2005/03/iso8601.html
@@ -153,7 +153,7 @@ var parseISO8601 = fc.parseISO8601 = function(s, ignoreTimezone) {
 		offset -= date.getTimezoneOffset();
 	}
 	return new Date(+date + (offset * 60 * 1000));
-}
+};
 
 var parseTime = fc.parseTime = function(s) { // returns minutes since start of day
 	if (typeof s == 'number') { // an hour
@@ -182,7 +182,7 @@ var parseTime = fc.parseTime = function(s) { // returns minutes since start of d
 
 var formatDate = fc.formatDate = function(date, format, options) {
 	return formatDates(date, null, format, options);
-}
+};
 
 var formatDates = fc.formatDates = function(date1, date2, format, options) {
 	options = options || defaults;
@@ -259,7 +259,7 @@ var formatDates = fc.formatDates = function(date1, date2, format, options) {
 		}
 	}
 	return res;
-}
+};
 
 var dateFormatters = {
 	s	: function(d)	{ return d.getSeconds() },
@@ -287,7 +287,9 @@ var dateFormatters = {
 	u	: function(d)	{ return formatDate(d, "yyyy-MM-dd'T'HH:mm:ss'Z'") },
 	S	: function(d)	{
 		var date = d.getDate();
-		if (date > 10 && date < 20) return 'th';
+		if (date > 10 && date < 20) {
+			return 'th';
+		}
 		return ['st', 'nd', 'rd'][date%10-1] || 'th';
 	}
 };
@@ -298,41 +300,50 @@ var dateFormatters = {
 -----------------------------------------------------------------------------*/
 
 function setOuterWidth(element, width, includeMargins) {
-	element.each(function() {
-		var e = $(this);
-		var w = width - horizontalSides(e);
-		if (includeMargins) {
-			w -= (parseInt(e.css('margin-left')) || 0) +
-				(parseInt(e.css('margin-right')) || 0);
-		}
-		e.width(w);
+	element.each(function(i, _element) {
+		_element.style.width = width - hsides(_element, includeMargins) + 'px';
 	});
-}
-
-function horizontalSides(e) {
-	return (parseInt(e.css('border-left-width')) || 0) +
-		(parseInt(e.css('padding-left')) || 0) +
-		(parseInt(e.css('padding-right')) || 0) +
-		(parseInt(e.css('border-right-width')) || 0);
 }
 
 function setOuterHeight(element, height, includeMargins) {
-	element.each(function() {
-		var e = $(this);
-		var h = height - verticalSides(e);
-		if (includeMargins) {
-			h -= (parseInt(e.css('margin-top')) || 0) +
-				(parseInt(e.css('margin-bottom')) || 0);
-		}
-		e.height(h);
+	element.each(function(i, _element) {
+		_element.style.height = height - vsides(_element, includeMargins) + 'px';
 	});
 }
 
-function verticalSides(e) {
-	return (parseInt(e.css('border-top-width')) || 0) +
-		(parseInt(e.css('padding-top')) || 0) +
-		(parseInt(e.css('padding-bottom')) || 0) +
-		(parseInt(e.css('border-bottom-width')) || 0);
+
+function hsides(_element, includeMargins) {
+	return (parseFloat(jQuery.curCSS(_element, 'paddingLeft', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'paddingRight', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'borderLeftWidth', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'borderRightWidth', true)) || 0) +
+	       (includeMargins ? hmargins(_element) : 0);
+}
+
+function hmargins(_element) {
+	return (parseFloat(jQuery.curCSS(_element, 'marginLeft', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'marginRight', true)) || 0);
+}
+
+function vsides(_element, includeMargins) {
+	return (parseFloat(jQuery.curCSS(_element, 'paddingTop', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'paddingBottom', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'borderTopWidth', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'borderBottomWidth', true)) || 0) +
+	       (includeMargins ? vmargins(_element) : 0);
+}
+
+function vmargins(_element) {
+	return (parseFloat(jQuery.curCSS(_element, 'marginTop', true)) || 0) +
+	       (parseFloat(jQuery.curCSS(_element, 'marginBottom', true)) || 0);
+}
+
+
+
+
+function setMinHeight(element, h) {
+	h = typeof h == 'number' ? h + 'px' : h;
+	element[0].style.cssText += ';min-height:' + h + ';_height:' + h;
 }
 
 
@@ -340,22 +351,24 @@ function verticalSides(e) {
 /* Position Calculation
 -----------------------------------------------------------------------------*/
 // nasty bugs in opera 9.25
-// position() returning relative to direct parent
+// position()'s top returning incorrectly with TR/TD or elements within TD
 
-var operaPositionBug;
+var topBug;
 
-function reportTBody(tbody) {
-	if (operaPositionBug == undefined) {
-		operaPositionBug = tbody.position().top != tbody.find('tr').position().top;
+function topCorrect(tr) { // tr/th/td or anything else
+	if (topBug !== false) {
+		var cell;
+		if (tr.is('th,td')) {
+			tr = (cell = tr).parent();
+		}
+		if (topBug === undefined && tr.is('tr')) {
+			topBug = tr.position().top != tr.children().position().top;
+		}
+		if (topBug) {
+			return tr.parent().position().top + (cell ? tr.position().top - cell.position().top : 0);
+		}
 	}
-}
-
-function safePosition(element, td, tr, tbody) {
-	var position = element.position();
-	if (operaPositionBug) {
-		position.top += tbody.position().top + tr.position().top - td.position().top;
-	}
-	return position;
+	return 0;
 }
 
 
@@ -365,45 +378,44 @@ function safePosition(element, td, tr, tbody) {
 
 function HoverMatrix(changeCallback) {
 
-	var tops=[], lefts=[],
+	var t=this,
+		tops=[], lefts=[],
 		prevRowE, prevColE,
 		origRow, origCol,
 		currRow, currCol;
 	
-	this.row = function(e, topBug) {
+	t.row = function(e) {
 		prevRowE = $(e);
-		tops.push(prevRowE.offset().top + (
-			(operaPositionBug && prevRowE.is('tr')) ? prevRowE.parent().position().top : 0
-		));
+		tops.push(prevRowE.offset().top + topCorrect(prevRowE));
 	};
 	
-	this.col = function(e) {
+	t.col = function(e) {
 		prevColE = $(e);
 		lefts.push(prevColE.offset().left);
 	};
 
-	this.mouse = function(x, y) {
-		if (origRow == undefined) {
+	t.mouse = function(x, y) {
+		if (origRow === undefined) {
 			tops.push(tops[tops.length-1] + prevRowE.outerHeight());
 			lefts.push(lefts[lefts.length-1] + prevColE.outerWidth());
 			currRow = currCol = -1;
 		}
 		var r, c;
-		for (r=0; r<tops.length && y>=tops[r]; r++) ;
-		for (c=0; c<lefts.length && x>=lefts[c]; c++) ;
+		for (r=0; r<tops.length && y>=tops[r]; r++) {}
+		for (c=0; c<lefts.length && x>=lefts[c]; c++) {}
 		r = r >= tops.length ? -1 : r - 1;
 		c = c >= lefts.length ? -1 : c - 1;
 		if (r != currRow || c != currCol) {
 			currRow = r;
 			currCol = c;
 			if (r == -1 || c == -1) {
-				this.cell = null;
+				t.cell = null;
 			}else{
-				if (origRow == undefined) {
+				if (origRow === undefined) {
 					origRow = r;
 					origCol = c;
 				}
-				this.cell = {
+				t.cell = {
 					row: r,
 					col: c,
 					top: tops[r],
@@ -415,7 +427,7 @@ function HoverMatrix(changeCallback) {
 					colDelta: c-origCol
 				};
 			}
-			changeCallback(this.cell);
+			changeCallback(t.cell);
 		}
 	};
 
@@ -427,25 +439,71 @@ function HoverMatrix(changeCallback) {
 -----------------------------------------------------------------------------*/
 
 var undefined,
-	dayIDs = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+	dayIDs = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
+	arrayPop = Array.prototype.pop;
 
 function zeroPad(n) {
 	return (n < 10 ? '0' : '') + n;
 }
 
-function smartProperty(obj, name) { // get a camel-cased/namespaced property
-	if (obj[name] != undefined) {
+function smartProperty(obj, name) { // get a camel-cased/namespaced property of an object
+	if (obj[name] !== undefined) {
 		return obj[name];
 	}
 	var parts = name.split(/(?=[A-Z])/),
 		i=parts.length-1, res;
 	for (; i>=0; i--) {
 		res = obj[parts[i].toLowerCase()];
-		if (res != undefined) {
+		if (res !== undefined) {
 			return res;
 		}
 	}
 	return obj[''];
 }
+
+function htmlEscape(s) {
+	return s
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/'/g, '&#039;')
+		.replace(/"/g, '&quot;');
+}
+
+
+
+function HorizontalPositionCache(getElement) {
+
+	var t = this,
+		elements = {},
+		lefts = {},
+		rights = {};
+		
+	function e(i) {
+		return elements[i] = elements[i] || getElement(i);
+	}
+	
+	t.left = function(i) {
+		return lefts[i] = lefts[i] === undefined ? e(i).position().left : lefts[i];
+	};
+	
+	t.right = function(i) {
+		return rights[i] = rights[i] === undefined ? t.left(i) + e(i).width() : rights[i];
+	};
+	
+	t.clear = function() {
+		elements = {};
+		lefts = {};
+		rights = {};
+	};
+	
+}
+
+
+
+function cssKey(_element) {
+	return _element.id + '/' + _element.className + '/' + _element.style.cssText.replace(/(^|;)\s*(top|left|width|height)\s*:[^;]*/ig, '');
+}
+
 
 
